@@ -23,7 +23,13 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.mcp_selection import MCP_SELECTION_PREFIX, selected_mcp_spec
 from omnigent.runtime import session_stream
 from omnigent.runtime.agent_cache import AgentCache
-from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ, AuthProvider, local_single_user_enabled
+from omnigent.server.auth import (
+    LEVEL_EDIT,
+    LEVEL_OWNER,
+    LEVEL_READ,
+    AuthProvider,
+    local_single_user_enabled,
+)
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
 from omnigent.server.routes._auth_helpers import (
     get_user_id,
@@ -350,6 +356,18 @@ def create_session_mcp_servers_router(
                 "Built-in agents are read-only through this endpoint.",
                 code=ErrorCode.INVALID_INPUT,
             )
+        # A session-scoped agent row can be bound into several sessions, so
+        # editing it through a session that does not own the row needs EDIT on
+        # the owning session; READ there must not be enough to rewrite another
+        # user's private agent.
+        if agent.session_id != session_id:
+            await require_access(
+                get_user_id(request, auth_provider),
+                agent.session_id,
+                LEVEL_EDIT,
+                permission_store,
+                conversation_store,
+            )
         if artifact_store is None or agent_cache is None:
             raise OmnigentError(
                 "Agent bundle storage not configured",
@@ -389,7 +407,7 @@ def create_session_mcp_servers_router(
 
             current_spec = validate_agent_bundle(
                 bundle_bytes,
-                enforce_handler_allowlist=not local_single_user_enabled(),
+                enforce_handler_allowlist=True,
             )
             current_names = {server.name for server in current_spec.mcp_servers} | {
                 server.name for server in selected_mcp_spec(current_spec, conv.labels).mcp_servers
@@ -421,10 +439,10 @@ def create_session_mcp_servers_router(
                     raise OmnigentError("MCP server not found", code=ErrorCode.NOT_FOUND)
                 _delete_mcp_server(location, target_name)
 
-            new_bundle = _tar_gz_dir(root)
+            new_bundle = _tar_gz_dir(root, original_bundle=bundle_bytes)
             new_spec = validate_agent_bundle(
                 new_bundle,
-                enforce_handler_allowlist=not local_single_user_enabled(),
+                enforce_handler_allowlist=True,
             )
             if new_spec.name != agent.name:
                 raise OmnigentError(
@@ -438,7 +456,17 @@ def create_session_mcp_servers_router(
         # segment (physical artifact key); only the sha encodes content.
         if new_location.rsplit("/", 1)[-1] != agent.bundle_location.rsplit("/", 1)[-1]:
             artifact_store.put(new_location, new_bundle)
-            updated = agent_store.update(agent.id, new_location, created_by)
+            if agent_store.supports_config_edit:
+                updated = agent_store.update_configuration(
+                    agent, new_location, description=agent.description, created_by=created_by
+                )
+                if updated is None:
+                    raise OmnigentError(
+                        "Agent changed during MCP edit; reload before saving",
+                        code=ErrorCode.CONFLICT,
+                    )
+            else:
+                updated = agent_store.update(agent.id, new_location, created_by)
             if updated is None:
                 raise OmnigentError("Agent not found", code=ErrorCode.NOT_FOUND)
             agent_cache.replace(
@@ -729,12 +757,19 @@ def _normalize_tarinfo(tarinfo: tarfile.TarInfo) -> tarfile.TarInfo:
     tarinfo.gid = 0
     tarinfo.uname = ""
     tarinfo.gname = ""
-    tarinfo.mode = 0o755 if tarinfo.isdir() else 0o644
+    tarinfo.mode = 0o755 if tarinfo.isdir() or tarinfo.mode & 0o111 else 0o644
     return tarinfo
 
 
-def _tar_gz_dir(bundle_dir: Path) -> bytes:
+def _tar_gz_dir(bundle_dir: Path, *, original_bundle: bytes | None = None) -> bytes:
     """Pack a bundle directory into deterministic ``.tar.gz`` bytes."""
+    # extract_safe drops attributes; restore only executable bits from the validated archive.
+    if original_bundle is not None:
+        with tarfile.open(fileobj=io.BytesIO(original_bundle), mode="r:*") as archive:
+            for member in archive:
+                path = bundle_dir / member.name
+                if member.isfile() and path.is_file():
+                    path.chmod(0o644 | (member.mode & 0o111))
     buf = io.BytesIO()
     with (
         gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz,

@@ -22,7 +22,7 @@ do not guess cwd-relative paths.
 | First turn: input, mode, recovery, preflight, existing-fix discovery | `resolve-inputs` |
 | Investigation: reported path, cause, and design intent | `resolve-investigate` |
 | Recovered repro, before authoring or reviewing | `resolve-repro-audit` |
-| Every mode: affected behavior, consumers, checks, evidence | `resolve-impact-assessment` |
+| Every mode: affected behavior, consumers, checks, evidence | `otto-impact-assessment` |
 | Existing fix PR (Step 2A) | `resolve-review-pr` |
 | Authoring the fix (Step 2B) | `resolve-author-fix` |
 | Author commit and publication choice (Step 3) | `resolve-publish` |
@@ -31,7 +31,7 @@ do not guess cwd-relative paths.
 
 Start with `resolve-inputs`. For reproduction-driven work, complete
 `resolve-repro-audit` before the existing-fix search and either resolution path.
-Start `resolve-impact-assessment` during investigation and refresh it against
+Start `otto-impact-assessment` during investigation and refresh it against
 the full final diff before delivery. Step 1–4 names are consistent across skills.
 
 ## Mode and authority
@@ -141,6 +141,6 @@ Add code comments only for non-obvious constraints; keep them to one or two line
 Remove redundant or stale comments in added or changed material before committing,
 including inherited tests you modify.
 
-Under a Databricks-network `--server`, public npm/PyPI registries are blocked.
+Under a network-restricted `--server`, public npm/PyPI registries are blocked.
 Read `dev/agent-environment.md` in the Omnigent source checkout before installing
 packages, and use the configured internal proxies or the target workflow's setup.
